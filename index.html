@@ -425,44 +425,51 @@
                         simTime.setMinutes(simTime.getMinutes() + 45); // 喝完管一阵
                         continue;
                     } else {
-                        // --- 策略 B: 此时不能喝，尝试回填 (Boost Previous) ---
-                        // 我们需要提升现在的水平，但现在喝太晚了。
-                        // 尝试把之前的某一杯加量 0.5 倍。
-                        // 寻找最近的一杯可操作的咖啡 (isAuto 或 手动皆可，这里我们只改 drinks 里的对象)
-                        // 倒序查找
+                        // --- 策略 B: 此时不能喝，尝试分级回填 (Tiered Backfill) ---
+                        // 优先把 1.0 -> 1.5，其次 1.5 -> 2.0，最后 2.0 -> 2.5
                         
                         let boostedSuccess = false;
-                        
-                        for (let i = drinks.length - 1; i >= 0; i--) {
-                            let d = drinks[i];
-                            // 限制：不要加得太离谱，比如最多加到 2.5 倍
-                            let currentMult = d.multiplier || 1.0;
-                            if (currentMult >= 2.5) continue; 
-                            
-                            let boostAmount = Math.round(unitDose * 0.5); // 加半杯
-                            let boostResidue = calculateSingleDrinkResidue(d.time, boostAmount, sleepDate, halfLife);
-                            
-                            // 检查加量后的总睡眠残留
-                            // 注意：currentSleepResidue 已经包含了 d 的原始残留，所以直接加 boostResidue 即可
-                            if (currentSleepResidue + boostResidue <= SLEEP_THRESHOLD) {
-                                // 成功！执行回填
-                                d.amount += boostAmount;
-                                d.multiplier = currentMult + 0.5;
-                                d.isBoosted = true; // 标记用于UI高亮
-                                boostedSuccess = true;
-                                backfillCount++;
-                                break; // 找到一个就够了，跳出循环
+                        let boostAmount = Math.round(unitDose * 0.5); // 每次加半杯
+
+                        // 定义回填查找函数：寻找特定倍数的饮品进行升级
+                        const tryBoostTier = (targetMult) => {
+                            // 倒序查找：优先加强离现在最近的那一杯（效果最直接）
+                            for (let i = drinks.length - 1; i >= 0; i--) {
+                                let d = drinks[i];
+                                let currentMult = d.multiplier || 1.0;
+                                
+                                // 严格匹配当前查找的倍数层级 (例如只找 1.0 的)
+                                if (currentMult !== targetMult) continue;
+                                
+                                // 检查升级后的睡眠安全性
+                                let boostResidue = calculateSingleDrinkResidue(d.time, boostAmount, sleepDate, halfLife);
+                                
+                                if (currentSleepResidue + boostResidue <= SLEEP_THRESHOLD) {
+                                    // 执行升级
+                                    d.amount += boostAmount;
+                                    d.multiplier = currentMult + 0.5;
+                                    d.isBoosted = true;
+                                    return true; // 成功回填
+                                }
                             }
+                            return false;
+                        };
+
+                        // 按优先级依次尝试
+                        if (tryBoostTier(1.0)) {
+                            boostedSuccess = true;
+                        } else if (tryBoostTier(1.5)) {
+                            boostedSuccess = true;
+                        } else if (tryBoostTier(2.0)) {
+                            boostedSuccess = true;
                         }
                         
                         if (boostedSuccess) {
-                            // 回填成功后，曲线抬高了。
-                            // 我们不移动 simTime，而是直接进入下一次循环重新检测 effectiveLevel。
-                            // 如果抬高后还不够，下次循环会再次触发 (可能再喝一杯，或再回填)
+                            backfillCount++;
+                            // 回填成功，重新评估当前时间点，不推进时间
                             continue;
                         } else {
-                            // 回填也救不了 (或者没得回填)，也没法喝新的。
-                            // 彻底躺平，停止规划。
+                            // 彻底无法挽救
                             break;
                         }
                     }
